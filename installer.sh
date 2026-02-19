@@ -192,15 +192,25 @@ update_app() {
 update_installer() {
     echo "Updating installer..."
     TEMP_PATH="/tmp/mypi_installer.sh"
-    curl -L "$API_BASE/installer/download" -o "$TEMP_PATH"
-    if [ -f "$TEMP_PATH" ]; then
-        mv "$TEMP_PATH" "$TARGET_PATH"
-        chmod +x "$TARGET_PATH"
-        echo "Installer updated successfully."
-    else
-        echo "Failed to update installer."
+    HTTP_CODE=$(curl -s -w "%{http_code}" -L "$API_BASE/installer/download" -o "$TEMP_PATH")
+
+    if [ "$HTTP_CODE" != "200" ]; then
+        echo "Failed to download installer. Server returned $HTTP_CODE"
+        rm -f "$TEMP_PATH"
+        return
     fi
+
+    if ! head -1 "$TEMP_PATH" | grep -q '^#!'; then
+        echo "Downloaded file is not a valid shell script. Aborting update."
+        rm -f "$TEMP_PATH"
+        return
+    fi
+
+    mv "$TEMP_PATH" "$TARGET_PATH"
+    chmod +x "$TARGET_PATH"
+    echo "Installer updated successfully."
 }
+
 
 uninstall_app() {
     APP_NAME="$1"
