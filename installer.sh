@@ -45,28 +45,65 @@ detect_type() {
     fi
 }
 
+ensure_node() {
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+        echo "Node.js and npm not found. Installing..."
+        if [ -x "$(command -v apt)" ]; then
+            apt update && apt install -y nodejs npm
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y epel-release
+            yum install -y nodejs npm
+        else
+            echo "Unsupported package manager. Please install Node.js and npm manually."
+            exit 1
+        fi
+        echo "Node.js and npm installed successfully."
+    fi
+}
+
+ensure_python() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Python3 not found. Installing..."
+        if [ -x "$(command -v apt)" ]; then
+            apt update && apt install -y python3 python3-venv python3-pip
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y python3 python3-venv python3-pip
+        else
+            echo "Unsupported package manager. Please install Python3 manually."
+            exit 1
+        fi
+        echo "Python3 installed successfully."
+    fi
+}
+
 install_dependencies() {
     APP_PATH="$1"
     TYPE=$(detect_type "$APP_PATH")
 
     if [ "$TYPE" == "node" ]; then
-        echo "Node.js dependencies detected."
-        read -p "Install npm dependencies? (yes/no): " CONFIRM
-        if [ "$CONFIRM" = "yes" ]; then
-            cd "$APP_PATH"
-            npm install
-            cd "$INSTALL_DIR"
+        ensure_node
+        if [ -f "$APP_PATH/package.json" ]; then
+            echo "Node.js dependencies detected."
+            read -p "Install npm dependencies? (yes/no): " CONFIRM
+            if [ "$CONFIRM" = "yes" ]; then
+                cd "$APP_PATH"
+                npm install
+                cd "$INSTALL_DIR"
+            fi
         fi
     elif [ "$TYPE" == "python" ]; then
-        echo "Python dependencies detected."
-        read -p "Create venv and install requirements.txt? (yes/no): " CONFIRM
-        if [ "$CONFIRM" = "yes" ]; then
-            cd "$APP_PATH"
-            python3 -m venv venv
-            source venv/bin/activate
-            pip install -r requirements.txt
-            deactivate
-            cd "$INSTALL_DIR"
+        ensure_python
+        if [ -f "$APP_PATH/requirements.txt" ]; then
+            echo "Python dependencies detected."
+            read -p "Create venv and install requirements.txt? (yes/no): " CONFIRM
+            if [ "$CONFIRM" = "yes" ]; then
+                cd "$APP_PATH"
+                python3 -m venv venv
+                source venv/bin/activate
+                pip install -r requirements.txt
+                deactivate
+                cd "$INSTALL_DIR"
+            fi
         fi
     fi
 }
@@ -74,7 +111,21 @@ install_dependencies() {
 download_zip() {
     APP_NAME="$1"
     OUTPUT="$2"
-    curl -L "$API_BASE/$APP_NAME/download" -o "$OUTPUT"
+
+    HTTP_CODE=$(curl -L -s -w "%{http_code}" "$API_BASE/$APP_NAME/download" -o "$OUTPUT")
+
+    if [ "$HTTP_CODE" != "200" ]; then
+        echo "Download failed. Server returned HTTP $HTTP_CODE"
+        rm -f "$OUTPUT"
+        exit 1
+    fi
+
+    FILE_TYPE=$(file -b "$OUTPUT")
+    if [[ "$FILE_TYPE" != *"Zip archive"* ]]; then
+        echo "Downloaded file is not a valid zip archive."
+        rm -f "$OUTPUT"
+        exit 1
+    fi
 }
 
 install_app() {
@@ -100,7 +151,6 @@ install_app() {
 
 update_app() {
     APP_NAME="$1"
-
     if ! is_valid_app "$APP_NAME"; then
         echo "App '$APP_NAME' not available on server."
         exit 1
@@ -143,7 +193,6 @@ update_installer() {
     echo "Updating installer..."
     TEMP_PATH="/tmp/mypi_installer.sh"
     curl -L "$API_BASE/installer/download" -o "$TEMP_PATH"
-
     if [ -f "$TEMP_PATH" ]; then
         mv "$TEMP_PATH" "$TARGET_PATH"
         chmod +x "$TARGET_PATH"
@@ -191,12 +240,14 @@ run_app() {
     cd "$APP_PATH"
 
     if [ "$TYPE" == "node" ]; then
+        ensure_node
         if [ -f "index.js" ]; then
             node index.js
         else
             echo "index.js not found."
         fi
     elif [ "$TYPE" == "python" ]; then
+        ensure_python
         if [ -f "app.py" ]; then
             if [ -d "venv" ]; then
                 source venv/bin/activate
