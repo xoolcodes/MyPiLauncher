@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
-
+if [ "$EUID" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
 API_BASE="http://fi10.bot-hosting.net:21922/api"
 INSTALL_DIR="/opt/mypi"
 APPS_DIR="$INSTALL_DIR/apps"
