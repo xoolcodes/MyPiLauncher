@@ -1,8 +1,10 @@
 #!/bin/bash
 set -e
+
 if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
+
 API_BASE="http://fi10.bot-hosting.net:21922/api"
 INSTALL_DIR="/opt/mypi"
 APPS_DIR="$INSTALL_DIR/apps"
@@ -14,9 +16,9 @@ SCRIPT_PATH="$(realpath "$0")"
 TARGET_PATH="$INSTALL_DIR/installer.sh"
 
 if [ "$SCRIPT_PATH" != "$TARGET_PATH" ]; then
-    sudo cp "$SCRIPT_PATH" "$TARGET_PATH"
-    sudo chmod +x "$TARGET_PATH"
-    sudo ln -sf "$TARGET_PATH" /usr/local/bin/MyPi
+    cp "$SCRIPT_PATH" "$TARGET_PATH"
+    chmod +x "$TARGET_PATH"
+    ln -sf "$TARGET_PATH" /usr/local/bin/MyPi
     echo "Installer moved to $TARGET_PATH"
     echo "You can now run: sudo MyPi <command>"
     exit 0
@@ -36,7 +38,7 @@ detect_type() {
     APP_PATH="$1"
     if [ -f "$APP_PATH/package.json" ]; then
         echo "node"
-    elif ls "$APP_PATH"/*.py > /dev/null 2>&1; then
+    elif [ -f "$APP_PATH/requirements.txt" ]; then
         echo "python"
     else
         echo "unknown"
@@ -48,11 +50,17 @@ install_dependencies() {
     TYPE=$(detect_type "$APP_PATH")
 
     if [ "$TYPE" == "node" ]; then
-        cd "$APP_PATH"
-        npm install
-        cd "$INSTALL_DIR"
+        echo "Node.js dependencies detected."
+        read -p "Install npm dependencies? (yes/no): " CONFIRM
+        if [ "$CONFIRM" = "yes" ]; then
+            cd "$APP_PATH"
+            npm install
+            cd "$INSTALL_DIR"
+        fi
     elif [ "$TYPE" == "python" ]; then
-        if [ -f "$APP_PATH/requirements.txt" ]; then
+        echo "Python dependencies detected."
+        read -p "Create venv and install requirements.txt? (yes/no): " CONFIRM
+        if [ "$CONFIRM" = "yes" ]; then
             cd "$APP_PATH"
             python3 -m venv venv
             source venv/bin/activate
@@ -131,6 +139,45 @@ update_app() {
     fi
 }
 
+update_installer() {
+    echo "Updating installer..."
+    TEMP_PATH="/tmp/mypi_installer.sh"
+    curl -L "$API_BASE/installer/download" -o "$TEMP_PATH"
+
+    if [ -f "$TEMP_PATH" ]; then
+        mv "$TEMP_PATH" "$TARGET_PATH"
+        chmod +x "$TARGET_PATH"
+        echo "Installer updated successfully."
+    else
+        echo "Failed to update installer."
+    fi
+}
+
+uninstall_app() {
+    APP_NAME="$1"
+    APP_PATH="$APPS_DIR/$APP_NAME"
+
+    if [ ! -d "$APP_PATH" ]; then
+        echo "App not installed."
+        exit 1
+    fi
+
+    rm -rf "$APP_PATH"
+    echo "$APP_NAME uninstalled successfully."
+}
+
+clear_all() {
+    echo "WARNING: This will remove ALL installed apps."
+    read -p "Type 'yes' to confirm: " CONFIRM
+    if [ "$CONFIRM" = "yes" ]; then
+        rm -rf "$APPS_DIR"
+        mkdir -p "$APPS_DIR"
+        echo "All apps removed."
+    else
+        echo "Cancelled."
+    fi
+}
+
 run_app() {
     APP_NAME="$1"
     APP_PATH="$APPS_DIR/$APP_NAME"
@@ -141,17 +188,23 @@ run_app() {
     fi
 
     TYPE=$(detect_type "$APP_PATH")
+    cd "$APP_PATH"
 
     if [ "$TYPE" == "node" ]; then
-        cd "$APP_PATH"
-        node index.js
-    elif [ "$TYPE" == "python" ]; then
-        cd "$APP_PATH"
-        if [ -d "venv" ]; then
-            source venv/bin/activate
+        if [ -f "index.js" ]; then
+            node index.js
+        else
+            echo "index.js not found."
         fi
-        MAIN_FILE=$(ls *.py | head -1)
-        python3 "$MAIN_FILE"
+    elif [ "$TYPE" == "python" ]; then
+        if [ -f "app.py" ]; then
+            if [ -d "venv" ]; then
+                source venv/bin/activate
+            fi
+            python3 app.py
+        else
+            echo "app.py not found."
+        fi
     else
         echo "Unknown app type."
     fi
@@ -169,7 +222,7 @@ list_server_apps() {
 
 update_all_apps() {
     SERVER_APPS=$(get_server_apps)
-    for APP in $(ls "$APPS_DIR"); do
+    for APP in $(ls "$APPS_DIR" 2>/dev/null); do
         if echo "$SERVER_APPS" | grep -Fxq "$APP"; then
             update_app "$APP"
         else
@@ -188,6 +241,15 @@ case "$1" in
     update-all)
         update_all_apps
         ;;
+    update-installer)
+        update_installer
+        ;;
+    uninstall)
+        uninstall_app "$2"
+        ;;
+    clear)
+        clear_all
+        ;;
     run)
         run_app "$2"
         ;;
@@ -202,8 +264,11 @@ case "$1" in
         echo "  MyPi server              # list apps on server"
         echo "  MyPi list                # list installed apps"
         echo "  MyPi install <app>       # install from server"
-        echo "  MyPi update <app>        # update from server"
+        echo "  MyPi uninstall <app>     # uninstall app"
+        echo "  MyPi update <app>        # update app"
         echo "  MyPi update-all          # update all installed apps"
+        echo "  MyPi update-installer    # update this installer"
+        echo "  MyPi clear               # remove ALL apps"
         echo "  MyPi run <app>           # run app"
         ;;
 esac
